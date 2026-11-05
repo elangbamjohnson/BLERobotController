@@ -22,6 +22,9 @@ This project uses an **Arduino Uno**, **HM-10 BLE module**, **L298N motor driver
 12. [Troubleshooting](#troubleshooting)
 13. [Future Improvements](#future-improvements)
 14. [Safety Notes](#safety-notes)
+15. [Known Limitations](#known-limitations)
+16. [Repository Layout](#repository-layout)
+17. [License](#license)
 
 ---
 
@@ -47,7 +50,10 @@ The project also supports an optional **IR remote control**, so the robot can be
 - L298N motor driver control
 - Optional IR remote control
 - Simple command protocol
-- Speed levels: slow, medium, fast
+- Automatic BLE discovery, connection, and rescanning after disconnect
+- Manual D-pad and Forward / Back / Stop quick actions
+- Voice mode with English speech transcription (command dispatch is unfinished)
+- Firmware speed levels: slow, medium, fast (not exposed in the current app)
 - Beginner-friendly wiring and testing flow
 
 ---
@@ -218,7 +224,7 @@ Common ground is required.
 
 ## Command Protocol
 
-The robot uses single-character commands.
+The robot uses single-character commands. Send exactly the character, without a newline. Unknown BLE characters (including line endings) stop the motors. Unknown IR codes are ignored.
 
 | Command | Action |
 |---|---|
@@ -227,609 +233,81 @@ The robot uses single-character commands.
 | L | Turn left |
 | R | Turn right |
 | S | Stop |
-| 1 | Slow speed |
-| 2 | Medium speed |
-| 3 | Fast speed |
+| 1 | Set slow speed: PWM 120 (startup default) |
+| 2 | Set medium speed: PWM 160 |
+| 3 | Set fast speed: PWM 190 |
 
 ---
 
+Speed commands update the stored speed; PWM changes on the next movement command. The current iOS interface sends only movement and stop commands, not `1`, `2`, or `3`.
+
 ## Arduino Firmware
 
-Create a new Arduino sketch and upload the following code.
+Open the existing sketch: [BLE_4WD_Robot.ino](Arduino/BLE_4WD_Robot/BLE_4WD_Robot.ino).
 
-> Install the `IRremote` library from Arduino IDE Library Manager before compiling.
+1. Install the `IRremote` library using Arduino IDE Library Manager. The sketch uses the `IRremote.hpp` / `IrReceiver` API; no library version is pinned in this repository.
+2. Select Arduino Uno and the connected board's port, then upload the sketch.
+3. Open Serial Monitor at **9600 baud**. The HM-10 UART is also configured for **9600 baud** in the sketch; its module configuration must match.
+4. For optional IR hardware, record your remote's command codes and adjust `readIRCommand()`. The sketch always includes and initializes IRremote, so the library is required even without an IR receiver.
 
-```cpp
-#include <SoftwareSerial.h>
-#include <IRremote.hpp>
+The current IR mapping is:
 
-// HM-10 BLE module
-// HM-10 TXD -> Arduino D2
-// HM-10 RXD -> Arduino D3 through voltage divider
-SoftwareSerial bleSerial(2, 3);
+| Button | IR code | BLE-equivalent command |
+|---|---|---|
+| Up | `0x18` | `F` |
+| Down | `0x52` | `B` |
+| Left | `0x08` | `L` |
+| Right | `0x5A` | `R` |
+| OK | `0x1C` | `S` |
 
-// IR receiver
-#define IR_RECEIVE_PIN 4
-
-// L298N pins
-#define ENA 5
-#define ENB 6
-#define IN1 8
-#define IN2 9
-#define IN3 10
-#define IN4 11
-
-int motorSpeed = 120;
-
-void setup() {
-  Serial.begin(9600);
-  bleSerial.begin(9600);
-
-  IrReceiver.begin(IR_RECEIVE_PIN, ENABLE_LED_FEEDBACK);
-
-  pinMode(ENA, OUTPUT);
-  pinMode(ENB, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
-
-  stopMotors();
-
-  Serial.println("BLE + IR 4WD Robot Ready");
-}
-
-void loop() {
-  readBLECommand();
-  readIRCommand();
-}
-
-void readBLECommand() {
-  if (bleSerial.available()) {
-    char command = bleSerial.read();
-    Serial.print("BLE Command: ");
-    Serial.println(command);
-    handleCommand(command);
-  }
-}
-
-void readIRCommand() {
-  if (IrReceiver.decode()) {
-    uint32_t command = IrReceiver.decodedIRData.command;
-
-    Serial.print("IR Command: ");
-    Serial.println(command, HEX);
-
-    // These values may differ depending on your remote.
-    // Open Serial Monitor and press remote buttons to map your own codes.
-    switch (command) {
-      case 0x18: // Up
-        handleCommand('F');
-        break;
-
-      case 0x52: // Down
-        handleCommand('B');
-        break;
-
-      case 0x08: // Left
-        handleCommand('L');
-        break;
-
-      case 0x5A: // Right
-        handleCommand('R');
-        break;
-
-      case 0x1C: // OK
-        handleCommand('S');
-        break;
-
-      default:
-        break;
-    }
-
-    IrReceiver.resume();
-  }
-}
-
-void handleCommand(char command) {
-  switch (command) {
-    case 'F':
-      forward();
-      break;
-
-    case 'B':
-      backward();
-      break;
-
-    case 'L':
-      left();
-      break;
-
-    case 'R':
-      right();
-      break;
-
-    case 'S':
-      stopMotors();
-      break;
-
-    case '1':
-      motorSpeed = 120;
-      Serial.println("Speed: Slow");
-      break;
-
-    case '2':
-      motorSpeed = 160;
-      Serial.println("Speed: Medium");
-      break;
-
-    case '3':
-      motorSpeed = 190;
-      Serial.println("Speed: Fast");
-      break;
-
-    default:
-      stopMotors();
-      break;
-  }
-}
-
-void forward() {
-  analogWrite(ENA, motorSpeed);
-  analogWrite(ENB, motorSpeed);
-
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-}
-
-void backward() {
-  analogWrite(ENA, motorSpeed);
-  analogWrite(ENB, motorSpeed);
-
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
-}
-
-void left() {
-  analogWrite(ENA, motorSpeed);
-  analogWrite(ENB, motorSpeed);
-
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-}
-
-void right() {
-  analogWrite(ENA, motorSpeed);
-  analogWrite(ENB, motorSpeed);
-
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
-}
-
-void stopMotors() {
-  analogWrite(ENA, 0);
-  analogWrite(ENB, 0);
-
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, LOW);
-}
-```
+The sketch is the source of truth for firmware behavior and wiring constants.
 
 ---
 
 ## iOS SwiftUI App
 
-Create a new iOS project in Xcode:
+Open the existing [Xcode project](BLERobotController/BLERobotController.xcodeproj); do not create a new project or replace the source with older README examples.
 
-```text
-Product: iOS App
-Interface: SwiftUI
-Language: Swift
-Minimum target: iOS 16+
-```
+### Project configuration
 
-Add this permission to `Info.plist`:
+- The project records Xcode **26.5** as its creation version. Use Xcode with an SDK supporting the configured iOS **26.5** deployment target.
+- The app uses SwiftUI, CoreBluetooth, Combine, Speech, and AVFoundation; no external app package dependencies are declared.
+- Swift language version is configured as **5.10**.
+- The project also lists macOS **26.3** and visionOS **26.5** targets. These settings do not establish working support on those platforms; the implementation uses `AVAudioSession` without platform guards. Use an iPhone destination for the documented workflow.
+- Choose your own development team under **Signing & Capabilities** and adjust the bundle identifier if required for provisioning. The checked-in identifier is `com.personal.BLERobotController`.
 
-```xml
-<key>NSBluetoothAlwaysUsageDescription</key>
-<string>This app uses Bluetooth to control the BLE robot toy.</string>
-```
+Xcode generates `Info.plist`. These permission descriptions already exist in both Debug and Release build settings:
 
-### BLEManager.swift
+| Generated Info.plist key | Purpose |
+|---|---|
+| `NSBluetoothAlwaysUsageDescription` | Connect to the BLE robot |
+| `NSMicrophoneUsageDescription` | Record voice input |
+| `NSSpeechRecognitionUsageDescription` | Transcribe voice input |
 
-```swift
-import Foundation
-import CoreBluetooth
+### Connection and manual control
 
-final class BLEManager: NSObject, ObservableObject {
+[BLEManager.swift](BLERobotController/BLERobotController/BLEManager.swift) starts scanning when Bluetooth is powered on, filters for service **FFE0**, and automatically connects to the first discovered matching peripheral. There is no device picker or scan button in the current interface.
 
-    @Published var isBluetoothReady = false
-    @Published var isScanning = false
-    @Published var isConnected = false
-    @Published var statusText = "Bluetooth not ready"
-    @Published var discoveredDevices: [CBPeripheral] = []
+The manager discovers characteristic **FFE1**, then marks the robot connected. Commands are written as UTF-8 using **write without response**. The module must support that write mode; the manager does not check characteristic write properties or fall back to writes with response.
 
-    private var centralManager: CBCentralManager!
-    private var connectedPeripheral: CBPeripheral?
-    private var writableCharacteristic: CBCharacteristic?
+After a disconnect, scanning resumes automatically. Failed connections schedule another scan after two seconds. The manager has a `disconnect()` method, but the current UI does not expose it, and the disconnect callback resumes scanning.
 
-    private let hm10ServiceUUID = CBUUID(string: "FFE0")
-    private let hm10CharacteristicUUID = CBUUID(string: "FFE1")
+[ContentView.swift](BLERobotController/BLERobotController/ContentView.swift) provides:
 
-    override init() {
-        super.init()
-        centralManager = CBCentralManager(delegate: self, queue: .main)
-    }
+- A connection status badge and connected device name.
+- Manual and Voice mode selection.
+- A manual D-pad for `F`, `B`, `L`, `R`, and `S`.
+- Forward, Back, and Stop quick actions and transient last-command feedback.
 
-    func startScan() {
-        guard centralManager.state == .poweredOn else {
-            statusText = "Bluetooth is not powered on"
-            return
-        }
+Buttons send a command on tap. Releasing a button does not send Stop. The interface has no speed picker; the firmware starts at PWM **120**.
 
-        discoveredDevices.removeAll()
-        writableCharacteristic = nil
-        connectedPeripheral = nil
-        isConnected = false
+### Voice mode: current implementation
 
-        statusText = "Scanning for HM-10..."
-        isScanning = true
+`SpeechRecognitionManager` is defined in `ContentView.swift`. It requests speech authorization, uses the **en-US** recognizer, and displays partial transcriptions after tapping **TAP TO SPEAK**. Tapping again or switching to Manual stops listening.
 
-        centralManager.scanForPeripherals(
-            withServices: [hm10ServiceUUID],
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
-        )
+**Voice control is incomplete:** changes to recognized text do not invoke `sendCommand()` or send a BLE command. The parser exists, but the voice UI currently only transcribes speech.
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self else { return }
-
-            if self.isScanning {
-                self.stopScan()
-
-                if self.discoveredDevices.isEmpty {
-                    self.statusText = "No HM-10 device found"
-                }
-            }
-        }
-    }
-
-    func stopScan() {
-        centralManager.stopScan()
-        isScanning = false
-    }
-
-    func connect(to peripheral: CBPeripheral) {
-        stopScan()
-        statusText = "Connecting to \(peripheral.displayName)"
-        connectedPeripheral = peripheral
-        connectedPeripheral?.delegate = self
-        centralManager.connect(peripheral, options: nil)
-    }
-
-    func disconnect() {
-        guard let peripheral = connectedPeripheral else { return }
-        centralManager.cancelPeripheralConnection(peripheral)
-    }
-
-    func send(_ text: String) {
-        guard isConnected else {
-            statusText = "Robot is not connected"
-            return
-        }
-
-        guard let peripheral = connectedPeripheral,
-              let characteristic = writableCharacteristic else {
-            statusText = "Writable characteristic not found"
-            return
-        }
-
-        guard let data = text.data(using: .utf8) else { return }
-
-        let writeType: CBCharacteristicWriteType =
-            characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-
-        peripheral.writeValue(data, for: characteristic, type: writeType)
-        statusText = "Sent: \(text)"
-    }
-}
-
-extension BLEManager: CBCentralManagerDelegate {
-
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            isBluetoothReady = true
-            statusText = "Bluetooth ready"
-
-        case .poweredOff:
-            isBluetoothReady = false
-            isConnected = false
-            statusText = "Bluetooth is turned off"
-
-        case .unauthorized:
-            isBluetoothReady = false
-            statusText = "Bluetooth permission denied"
-
-        case .unsupported:
-            isBluetoothReady = false
-            statusText = "Bluetooth not supported"
-
-        case .resetting:
-            isBluetoothReady = false
-            statusText = "Bluetooth resetting"
-
-        case .unknown:
-            isBluetoothReady = false
-            statusText = "Bluetooth state unknown"
-
-        @unknown default:
-            isBluetoothReady = false
-            statusText = "Unknown Bluetooth error"
-        }
-    }
-
-    func centralManager(
-        _ central: CBCentralManager,
-        didDiscover peripheral: CBPeripheral,
-        advertisementData: [String : Any],
-        rssi RSSI: NSNumber
-    ) {
-        if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
-            discoveredDevices.append(peripheral)
-        }
-
-        statusText = "Found \(peripheral.displayName)"
-    }
-
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        statusText = "Connected. Discovering services..."
-        isConnected = true
-        peripheral.delegate = self
-        peripheral.discoverServices([hm10ServiceUUID])
-    }
-
-    func centralManager(
-        _ central: CBCentralManager,
-        didFailToConnect peripheral: CBPeripheral,
-        error: Error?
-    ) {
-        isConnected = false
-        statusText = "Failed to connect: \(error?.localizedDescription ?? "Unknown error")"
-    }
-
-    func centralManager(
-        _ central: CBCentralManager,
-        didDisconnectPeripheral peripheral: CBPeripheral,
-        error: Error?
-    ) {
-        isConnected = false
-        writableCharacteristic = nil
-        statusText = "Disconnected"
-    }
-}
-
-extension BLEManager: CBPeripheralDelegate {
-
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        if let error {
-            statusText = "Service discovery failed: \(error.localizedDescription)"
-            return
-        }
-
-        guard let services = peripheral.services else { return }
-
-        for service in services where service.uuid == hm10ServiceUUID {
-            peripheral.discoverCharacteristics([hm10CharacteristicUUID], for: service)
-        }
-    }
-
-    func peripheral(
-        _ peripheral: CBPeripheral,
-        didDiscoverCharacteristicsFor service: CBService,
-        error: Error?
-    ) {
-        if let error {
-            statusText = "Characteristic discovery failed: \(error.localizedDescription)"
-            return
-        }
-
-        guard let characteristics = service.characteristics else { return }
-
-        for characteristic in characteristics where characteristic.uuid == hm10CharacteristicUUID {
-            writableCharacteristic = characteristic
-            statusText = "Robot ready"
-            return
-        }
-
-        statusText = "HM-10 write characteristic not found"
-    }
-}
-
-extension CBPeripheral {
-    var displayName: String {
-        if let name, !name.isEmpty {
-            return name
-        }
-        return "Unknown BLE Device"
-    }
-}
-```
-
-### ContentView.swift
-
-```swift
-import SwiftUI
-
-struct ContentView: View {
-
-    @StateObject private var bleManager = BLEManager()
-    @State private var selectedSpeed = "2"
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                statusView
-                scanSection
-                speedPicker
-                Spacer()
-                controlPad
-                stopButton
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("BLE Robot")
-            .onChange(of: selectedSpeed) { _, newValue in
-                bleManager.send(newValue)
-            }
-        }
-    }
-
-    private var statusView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Circle()
-                    .fill(bleManager.isConnected ? .green : .red)
-                    .frame(width: 12, height: 12)
-
-                Text(bleManager.isConnected ? "Connected" : "Not Connected")
-                    .font(.headline)
-
-                Spacer()
-            }
-
-            Text(bleManager.statusText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var scanSection: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Button {
-                    bleManager.startScan()
-                } label: {
-                    Label(
-                        bleManager.isScanning ? "Scanning..." : "Scan Robot",
-                        systemImage: "dot.radiowaves.left.and.right"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!bleManager.isBluetoothReady || bleManager.isScanning)
-
-                Button {
-                    bleManager.disconnect()
-                } label: {
-                    Image(systemName: "xmark.circle")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!bleManager.isConnected)
-            }
-
-            if !bleManager.discoveredDevices.isEmpty && !bleManager.isConnected {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Available Devices")
-                        .font(.headline)
-
-                    ForEach(bleManager.discoveredDevices, id: \.identifier) { device in
-                        Button {
-                            bleManager.connect(to: device)
-                        } label: {
-                            HStack {
-                                Image(systemName: "antenna.radiowaves.left.and.right")
-                                Text(device.displayName)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                            }
-                            .padding()
-                            .background(.thinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    private var speedPicker: some View {
-        Picker("Speed", selection: $selectedSpeed) {
-            Text("Slow").tag("1")
-            Text("Medium").tag("2")
-            Text("Fast").tag("3")
-        }
-        .pickerStyle(.segmented)
-        .disabled(!bleManager.isConnected)
-    }
-
-    private var controlPad: some View {
-        VStack(spacing: 16) {
-            controlButton(title: "Forward", icon: "arrow.up", command: "F")
-
-            HStack(spacing: 24) {
-                controlButton(title: "Left", icon: "arrow.left", command: "L")
-                controlButton(title: "Right", icon: "arrow.right", command: "R")
-            }
-
-            controlButton(title: "Backward", icon: "arrow.down", command: "B")
-        }
-    }
-
-    private var stopButton: some View {
-        Button {
-            bleManager.send("S")
-        } label: {
-            Text("STOP")
-                .font(.title2.bold())
-                .foregroundStyle(.white)
-                .frame(width: 150, height: 60)
-                .background(.red)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-        }
-        .disabled(!bleManager.isConnected)
-        .opacity(bleManager.isConnected ? 1 : 0.4)
-    }
-
-    private func controlButton(title: String, icon: String, command: String) -> some View {
-        Button {
-            bleManager.send(command)
-        } label: {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.title)
-                Text(title)
-                    .font(.caption)
-            }
-            .foregroundStyle(.white)
-            .frame(width: 110, height: 90)
-            .background(.blue)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-        }
-        .disabled(!bleManager.isConnected)
-        .opacity(bleManager.isConnected ? 1 : 0.4)
-    }
-}
-```
+The parser also checks the broad substrings `go` and `move` for Forward before checking other directions. Consequently, phrases shown in the UI such as “go left”, “go right”, and “go back” currently parse as Forward if the parser is called. Fix dispatch and parsing before relying on voice operation.
 
 ---
 
@@ -843,18 +321,20 @@ struct ContentView: View {
 6. Connect right-side motors together to L298N Motor B.
 7. Wire L298N control pins to Arduino.
 8. Wire HM-10 to Arduino using the voltage divider.
-9. Wire IR receiver to Arduino D4.
+9. If using IR control, wire the receiver to Arduino D4.
 10. Connect battery holder to L298N motor input.
 11. Connect all grounds together.
-12. Upload Arduino firmware.
-13. Build and run the iOS app on a real iPhone.
-14. Scan for the HM-10 module.
-15. Connect and test movement.
-16. Test IR remote buttons.
+12. Upload the existing Arduino sketch using the setup above.
+13. Open the existing Xcode project, configure signing, select the `BLERobotController` scheme, and build/run on a real iPhone running iOS 26.5 or later.
+14. Allow Bluetooth access and wait for automatic discovery and connection to the HM-10.
+15. Use Manual mode to test movement and Stop with the wheels raised.
+16. If installed, test IR remote buttons. Voice mode can be checked for transcription after granting microphone and speech permissions; it does not yet drive the robot.
 
 ---
 
 ## Testing Checklist
+
+These are manual verification steps, not recorded test results. The XCTest targets contain template unit tests and app-launch/performance/screenshot tests; there are no functional BLE, voice-parser, or firmware assertions.
 
 ### Motor test
 
@@ -869,8 +349,16 @@ struct ContentView: View {
 - HM-10 LED is powered.
 - iPhone app finds HM-10.
 - App connects successfully.
-- Buttons send commands.
+- Manual buttons send commands; confirm receipt in Serial Monitor rather than relying on the app checkmark.
+- Disconnecting the BLE link causes the app to resume scanning.
 - Arduino Serial Monitor shows command values.
+
+### Voice interface test
+
+- Grant microphone and speech recognition access.
+- Select Voice, tap the microphone, and check the displayed transcription.
+- Tap again or switch to Manual to stop listening.
+- Voice-to-BLE dispatch remains unimplemented; see [Known Limitations](#known-limitations).
 
 ### IR test
 
@@ -915,9 +403,10 @@ Check:
 
 - HM-10 is powered.
 - HM-10 is BLE, not HC-05 classic Bluetooth.
-- Bluetooth permission is added in Info.plist.
+- Bluetooth access is allowed; its usage description is already configured in the generated Info.plist.
+- The module advertises service FFE0 and exposes characteristic FFE1 with write-without-response support.
 - Test on a real iPhone, not simulator.
-- Try scanning again after restarting Arduino.
+- Restart the app or robot if discovery stalls; scanning starts automatically when Bluetooth is powered on.
 
 ### IR remote does not work
 
@@ -934,11 +423,14 @@ Check:
 ## Future Improvements
 
 - Add ultrasonic obstacle detection.
-- Add speed slider in the iOS app.
+- Expose firmware speed commands in the iOS app.
 - Add battery voltage monitoring.
 - Add LED headlights.
 - Add buzzer for horn sound.
-- Add CoreBluetooth reconnect logic.
+- Improve existing automatic rescanning with device selection, discovery error recovery, and write-property validation.
+- Complete voice-to-BLE dispatch and fix voice-command parsing.
+- Add a firmware command timeout and app lifecycle stop handling.
+- Add functional tests for command parsing and connection behavior.
 - Add joystick-style SwiftUI control.
 - Add autonomous driving mode.
 - Add encoder-based speed correction.
@@ -954,6 +446,31 @@ Check:
 - Do not power motors directly from Arduino 5V.
 - Keep wires away from moving wheels.
 - Switch off the battery holder when not in use.
+
+---
+
+## Known Limitations
+
+- **No automatic motor stop on connection loss:** the firmware has no command timeout or BLE link-state handling. Movement continues until a Stop/unknown BLE command, another movement command, reset, or power-off. The app does not send Stop when backgrounded or when listening ends.
+- **UI feedback is not robot confirmation:** manual buttons remain enabled while disconnected, and the feedback checkmark can appear even when `BLEManager.send()` fails. Writes use no response and the firmware sends no app-level acknowledgement.
+- Voice transcription is implemented, but command dispatch is missing and parser precedence is incorrect for several displayed phrases.
+- No speed control is exposed in the app, although the firmware accepts speed commands.
+- Discovery errors are largely logged; there is no explicit discovery timeout or complete recovery flow. RSSI is captured at discovery, with no periodic polling or signal indicator in the current UI.
+- Automated tests do not verify robot functionality. Physical-device and hardware testing are required to establish operation.
+
+---
+
+## Repository Layout
+
+| Path | Contents |
+|---|---|
+| [Arduino/BLE_4WD_Robot/BLE_4WD_Robot.ino](Arduino/BLE_4WD_Robot/BLE_4WD_Robot.ino) | BLE/IR command handling and motor control |
+| [BLERobotController/BLERobotController.xcodeproj](BLERobotController/BLERobotController.xcodeproj) | Build targets, signing, deployment versions, and permissions |
+| [BLERobotControllerApp.swift](BLERobotController/BLERobotController/BLERobotControllerApp.swift) | SwiftUI app entry point |
+| [BLEManager.swift](BLERobotController/BLERobotController/BLEManager.swift) | BLE discovery, connection, writes, and debug utilities |
+| [ContentView.swift](BLERobotController/BLERobotController/ContentView.swift) | Manual/voice interface and speech recognition manager |
+| [BLERobotControllerTests](BLERobotController/BLERobotControllerTests) | Template unit/performance tests |
+| [BLERobotControllerUITests](BLERobotController/BLERobotControllerUITests) | Launch, performance, and screenshot tests |
 
 ---
 
